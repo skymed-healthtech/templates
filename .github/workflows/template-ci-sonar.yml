@@ -1,0 +1,55 @@
+name: "Template CI - SonarQube"
+
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: "Path to the app directory"
+        required: true
+        type: string
+      sonar_project_key:
+        description: "SonarQube project key"
+        required: true
+        type: string
+      sonar_host_url:
+        description: "SonarQube server URL"
+        required: false
+        type: string
+        default: "https://sonarqube.skymed.app.br"
+      sonar_sources:
+        description: "Source directories (relative to app_path)"
+        required: false
+        type: string
+        default: "."
+      sonar_exclusions:
+        description: "Files/dirs to exclude"
+        required: false
+        type: string
+        default: "node_modules/**,dist/**,build/**,coverage/**,**/*.test.*,**/*.spec.*"
+    secrets:
+      SONAR_TOKEN:
+        description: "SonarQube authentication token"
+        required: true
+
+jobs:
+  sonar:
+    name: "SonarQube - ${{ inputs.app_path }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        with:
+          projectBaseDir: ${{ inputs.app_path }}
+          args: >
+            -Dsonar.projectKey=${{ inputs.sonar_project_key }}
+            -Dsonar.sources=${{ inputs.sonar_sources }}
+            -Dsonar.exclusions=${{ inputs.sonar_exclusions }}
+            -Dsonar.branch.name=${{ github.ref_name }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}

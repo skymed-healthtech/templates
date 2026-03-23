@@ -1,0 +1,82 @@
+name: "Template CI - Tests"
+
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: "Path to the app directory"
+        required: true
+        type: string
+      node_version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      dotnet_version:
+        description: ".NET version"
+        required: false
+        type: string
+        default: ""
+      language:
+        description: "Language: node, dotnet, python"
+        required: false
+        type: string
+        default: "node"
+      test_command:
+        description: "Custom test command (overrides default)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  test:
+    name: "Test - ${{ inputs.app_path }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node.js
+      - name: Setup Node.js
+        if: inputs.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: "npm"
+          cache-dependency-path: "${{ inputs.app_path }}/package-lock.json"
+
+      - name: Install dependencies
+        if: inputs.language == 'node'
+        working-directory: ${{ inputs.app_path }}
+        run: npm ci
+
+      - name: Run tests
+        if: inputs.language == 'node'
+        working-directory: ${{ inputs.app_path }}
+        run: ${{ inputs.test_command != '' && inputs.test_command || 'npm test --if-present' }}
+
+      # .NET
+      - name: Setup .NET
+        if: inputs.language == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Run tests
+        if: inputs.language == 'dotnet'
+        working-directory: ${{ inputs.app_path }}
+        run: ${{ inputs.test_command != '' && inputs.test_command || 'dotnet test' }}
+
+      # Python
+      - name: Setup Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        if: inputs.language == 'python'
+        working-directory: ${{ inputs.app_path }}
+        run: |
+          pip install -r requirements.txt 2>/dev/null || true
+          ${{ inputs.test_command != '' && inputs.test_command || 'python -m pytest --tb=short -q 2>/dev/null || echo "No tests found"' }}

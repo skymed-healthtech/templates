@@ -1,0 +1,137 @@
+name: "Template CI - Full Pipeline"
+
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: "Path to the app directory"
+        required: true
+        type: string
+      app_name:
+        description: "Application name (used for ECR repo, SonarQube key, etc.)"
+        required: true
+        type: string
+      language:
+        description: "Language: node, dotnet, python"
+        required: false
+        type: string
+        default: "node"
+      node_version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      dotnet_version:
+        description: ".NET version"
+        required: false
+        type: string
+        default: "8.0"
+      dockerfile:
+        description: "Dockerfile path relative to app_path"
+        required: false
+        type: string
+        default: "Dockerfile"
+      ecr_repository:
+        description: "ECR repository name (defaults to app_name)"
+        required: false
+        type: string
+        default: ""
+      aws_region:
+        description: "AWS region"
+        required: false
+        type: string
+        default: "us-east-1"
+      build_args:
+        description: "Docker build args comma-separated (e.g. BUILD_ENV=production,NODE_ENV=production)"
+        required: false
+        type: string
+        default: ""
+      sonar_host_url:
+        description: "SonarQube server URL"
+        required: false
+        type: string
+        default: "https://sonarqube.skymed.app.br"
+      skip_lint:
+        description: "Skip linter step"
+        required: false
+        type: boolean
+        default: false
+      skip_test:
+        description: "Skip test step"
+        required: false
+        type: boolean
+        default: false
+      skip_sonar:
+        description: "Skip SonarQube step"
+        required: false
+        type: boolean
+        default: false
+      skip_docker:
+        description: "Skip Docker build/push step"
+        required: false
+        type: boolean
+        default: false
+      test_command:
+        description: "Custom test command"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SONAR_TOKEN:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_ACCOUNT_ID:
+        required: false
+
+jobs:
+  # Stage 1: Lint
+  lint:
+    if: ${{ !inputs.skip_lint }}
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-linter.yml@main
+    with:
+      app_path: ${{ inputs.app_path }}
+      language: ${{ inputs.language }}
+      node_version: ${{ inputs.node_version }}
+      dotnet_version: ${{ inputs.dotnet_version }}
+
+  # Stage 2: Tests (parallel with lint)
+  test:
+    if: ${{ !inputs.skip_test }}
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-test.yml@main
+    with:
+      app_path: ${{ inputs.app_path }}
+      language: ${{ inputs.language }}
+      node_version: ${{ inputs.node_version }}
+      dotnet_version: ${{ inputs.dotnet_version }}
+      test_command: ${{ inputs.test_command }}
+
+  # Stage 3: SonarQube (after lint + test)
+  sonar:
+    if: ${{ !inputs.skip_sonar }}
+    needs: [lint, test]
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-sonar.yml@main
+    with:
+      app_path: ${{ inputs.app_path }}
+      sonar_project_key: ${{ inputs.app_name }}
+      sonar_host_url: ${{ inputs.sonar_host_url }}
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # Stage 4: Build & Push Docker (after sonar)
+  docker:
+    if: ${{ !inputs.skip_docker }}
+    needs: [sonar]
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-buildpush-docker.yml@main
+    with:
+      app_path: ${{ inputs.app_path }}
+      dockerfile: ${{ inputs.dockerfile }}
+      ecr_repository: ${{ inputs.ecr_repository != '' && inputs.ecr_repository || inputs.app_name }}
+      aws_region: ${{ inputs.aws_region }}
+      build_args: ${{ inputs.build_args }}
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}

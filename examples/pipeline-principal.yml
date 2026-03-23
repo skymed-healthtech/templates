@@ -1,0 +1,117 @@
+# =============================================================================
+# pipeline-principal.yml
+# Copie este arquivo para: .github/workflows/ci.yml no seu monorepo
+#
+# Detecta automaticamente quais pastas foram alteradas e roda o CI apenas
+# para os apps modificados. Cada app tem seu proprio Dockerfile.
+# =============================================================================
+
+name: "CI - Monorepo"
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".gitignore"
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+
+# Cancel previous runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==========================================================================
+  # Stage 1: Detect which apps changed
+  # ==========================================================================
+  detect-changes:
+    name: "Detect Changed Apps"
+    runs-on: ubuntu-latest
+    outputs:
+      horus: ${{ steps.changes.outputs.horus }}
+      sky-agents: ${{ steps.changes.outputs.sky-agents }}
+      skymed-app-br: ${{ steps.changes.outputs.skymed-app-br }}
+      # Add more apps here as needed:
+      # app04: ${{ steps.changes.outputs.app04 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes per app
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            horus:
+              - 'horus/**'
+            sky-agents:
+              - 'sky-agents/**'
+            skymed-app-br:
+              - 'skymed.app.br/**'
+
+  # ==========================================================================
+  # Stage 2: Run CI for each changed app
+  # ==========================================================================
+
+  # --- Horus (TypeScript) ---
+  ci-horus:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.horus == 'true'
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-full.yml@main
+    with:
+      app_path: "horus"
+      app_name: "horus"
+      language: "node"
+      node_version: "20"
+      ecr_repository: "horus"
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+  # --- Sky-Agents (C# / .NET 8) ---
+  ci-sky-agents:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.sky-agents == 'true'
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-full.yml@main
+    with:
+      app_path: "sky-agents"
+      app_name: "sky-agents"
+      language: "dotnet"
+      dotnet_version: "8.0"
+      ecr_repository: "sky-agents"
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+  # --- Skymed.app.br (Marketing Website) ---
+  ci-skymed-app-br:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.skymed-app-br == 'true'
+    uses: skymed-healthtech/templates/.github/workflows/template-ci-full.yml@main
+    with:
+      app_path: "skymed.app.br"
+      app_name: "skymed-app-br"
+      language: "node"
+      node_version: "20"
+      ecr_repository: "skymed-app-br"
+      skip_sonar: true
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}

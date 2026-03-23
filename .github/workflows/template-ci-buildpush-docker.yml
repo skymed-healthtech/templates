@@ -1,0 +1,108 @@
+name: "Template CI - Build & Push Docker"
+
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: "Path to the app directory (where Dockerfile lives)"
+        required: true
+        type: string
+      dockerfile:
+        description: "Dockerfile path relative to app_path"
+        required: false
+        type: string
+        default: "Dockerfile"
+      ecr_repository:
+        description: "ECR repository name (e.g. anesthesia)"
+        required: true
+        type: string
+      aws_region:
+        description: "AWS region"
+        required: false
+        type: string
+        default: "us-east-1"
+      image_tag:
+        description: "Image tag (default: github run number)"
+        required: false
+        type: string
+        default: ""
+      build_args:
+        description: "Docker build args (e.g. BUILD_ENV=production)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        description: "AWS Access Key ID"
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        description: "AWS Secret Access Key"
+        required: true
+      AWS_ACCOUNT_ID:
+        description: "AWS Account ID for ECR"
+        required: true
+    outputs:
+      image_uri:
+        description: "Full image URI pushed to ECR"
+        value: ${{ jobs.build-push.outputs.image_uri }}
+      image_tag:
+        description: "Image tag used"
+        value: ${{ jobs.build-push.outputs.image_tag }}
+
+jobs:
+  build-push:
+    name: "Build & Push - ${{ inputs.app_path }}"
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
+      image_tag: ${{ steps.build.outputs.image_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Build and push Docker image
+        id: build
+        working-directory: ${{ inputs.app_path }}
+        run: |
+          REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com"
+          REPO="${{ inputs.ecr_repository }}"
+          TAG="${{ inputs.image_tag != '' && inputs.image_tag || github.run_number }}"
+          IMAGE_URI="${REGISTRY}/${REPO}:${TAG}"
+
+          BUILD_CMD="docker build -f ${{ inputs.dockerfile }} -t ${IMAGE_URI}"
+
+          # Add build args if provided
+          if [ -n "${{ inputs.build_args }}" ]; then
+            IFS=',' read -ra ARGS <<< "${{ inputs.build_args }}"
+            for arg in "${ARGS[@]}"; do
+              BUILD_CMD="${BUILD_CMD} --build-arg ${arg}"
+            done
+          fi
+
+          BUILD_CMD="${BUILD_CMD} ."
+
+          echo "Building: ${BUILD_CMD}"
+          eval ${BUILD_CMD}
+
+          echo "Pushing: ${IMAGE_URI}"
+          docker push ${IMAGE_URI}
+
+          # Also tag as latest
+          docker tag ${IMAGE_URI} ${REGISTRY}/${REPO}:latest
+          docker push ${REGISTRY}/${REPO}:latest
+
+          echo "image_uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT

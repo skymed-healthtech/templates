@@ -1,0 +1,77 @@
+name: "Template CI - Linter"
+
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: "Path to the app directory"
+        required: true
+        type: string
+      node_version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "20"
+      dotnet_version:
+        description: ".NET version"
+        required: false
+        type: string
+        default: ""
+      language:
+        description: "Language: node, dotnet, python"
+        required: false
+        type: string
+        default: "node"
+
+jobs:
+  lint:
+    name: "Lint - ${{ inputs.app_path }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node.js / TypeScript
+      - name: Setup Node.js
+        if: inputs.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: "npm"
+          cache-dependency-path: "${{ inputs.app_path }}/package-lock.json"
+
+      - name: Install dependencies
+        if: inputs.language == 'node'
+        working-directory: ${{ inputs.app_path }}
+        run: npm ci
+
+      - name: Run ESLint
+        if: inputs.language == 'node'
+        working-directory: ${{ inputs.app_path }}
+        run: npm run lint --if-present
+
+      # .NET
+      - name: Setup .NET
+        if: inputs.language == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Run dotnet format
+        if: inputs.language == 'dotnet'
+        working-directory: ${{ inputs.app_path }}
+        run: dotnet format --verify-no-changes
+
+      # Python
+      - name: Setup Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Python linter
+        if: inputs.language == 'python'
+        working-directory: ${{ inputs.app_path }}
+        run: |
+          pip install ruff
+          ruff check .
