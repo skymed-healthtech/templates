@@ -1,0 +1,257 @@
+name: "Template CI - Monorepo Dynamic"
+
+on:
+  workflow_call:
+    inputs:
+      megalinter_flavor:
+        description: "MegaLinter flavor (all, cupcake, dart, dotnet, javascript, python)"
+        required: false
+        type: string
+        default: "all"
+      aws_region:
+        description: "AWS region"
+        required: false
+        type: string
+        default: "us-east-1"
+      sonar_host_url:
+        description: "SonarQube server URL"
+        required: false
+        type: string
+        default: "https://sonarqube.skymed.app.br"
+      skip_lint:
+        description: "Skip MegaLinter"
+        required: false
+        type: boolean
+        default: false
+      skip_sonar:
+        description: "Skip SonarQube"
+        required: false
+        type: boolean
+        default: false
+      skip_docker:
+        description: "Skip Docker build/push"
+        required: false
+        type: boolean
+        default: false
+      config_file:
+        description: "Path to apps config JSON (default: .github/apps.json)"
+        required: false
+        type: string
+        default: ".github/apps.json"
+    secrets:
+      SONAR_TOKEN:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_ACCOUNT_ID:
+        required: false
+
+jobs:
+  # ==========================================================================
+  # Stage 1: Discover which apps changed
+  # ==========================================================================
+  detect:
+    name: "Detect Changed Apps"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      has_changes: ${{ steps.build-matrix.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find changed apps
+        id: build-matrix
+        run: |
+          # Get list of changed files
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # Read apps config
+          CONFIG="${{ inputs.config_file }}"
+          if [ ! -f "$CONFIG" ]; then
+            echo "Config file $CONFIG not found!"
+            echo 'matrix={"include":[]}' >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Build matrix from changed apps
+          MATRIX='{"include":['
+          FIRST=true
+
+          # Read each app from config and check if it changed
+          for row in $(cat "$CONFIG" | jq -c '.apps[]'); do
+            APP_PATH=$(echo "$row" | jq -r '.path')
+            APP_NAME=$(echo "$row" | jq -r '.name')
+            LANGUAGE=$(echo "$row" | jq -r '.language // "node"')
+            ECR_REPO=$(echo "$row" | jq -r '.ecr_repository // .name')
+            DOCKERFILE=$(echo "$row" | jq -r '.dockerfile // "Dockerfile"')
+            MEGALINTER=$(echo "$row" | jq -r '.megalinter_flavor // "all"')
+            SKIP_SONAR=$(echo "$row" | jq -r '.skip_sonar // false')
+            SKIP_DOCKER=$(echo "$row" | jq -r '.skip_docker // false')
+            BUILD_ARGS=$(echo "$row" | jq -r '.build_args // ""')
+
+            # Check if any changed file is inside this app path
+            if echo "$CHANGED" | grep -q "^${APP_PATH}/"; then
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                MATRIX+=","
+              fi
+              MATRIX+="{\"app_path\":\"${APP_PATH}\",\"app_name\":\"${APP_NAME}\",\"language\":\"${LANGUAGE}\",\"ecr_repository\":\"${ECR_REPO}\",\"dockerfile\":\"${DOCKERFILE}\",\"megalinter_flavor\":\"${MEGALINTER}\",\"skip_sonar\":${SKIP_SONAR},\"skip_docker\":${SKIP_DOCKER},\"build_args\":\"${BUILD_ARGS}\"}"
+              echo ">> Changed: ${APP_NAME} (${APP_PATH})"
+            fi
+          done
+
+          MATRIX+=']}'
+
+          echo "Matrix: $MATRIX"
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+          if [ "$FIRST" = true ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ==========================================================================
+  # Stage 2: MegaLinter (per changed app)
+  # ==========================================================================
+  lint:
+    name: "Lint - ${{ matrix.app_name }}"
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true' && !inputs.skip_lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: MegaLinter
+        uses: oxsecurity/megalinter/flavors/${{ matrix.megalinter_flavor }}@v8
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_WORKSPACE: /github/workspace/${{ matrix.app_path }}
+          FILTER_REGEX_INCLUDE: "(${{ matrix.app_path }}/)"
+          PRINT_ALPACA: false
+          SHOW_ELAPSED_TIME: true
+          FILEIO_REPORTER: false
+          DISABLE_LINTERS: "SPELL_MISSPELL,SPELL_CSPELL,SPELL_PROSELINT,COPYPASTE_JSCPD,REPOSITORY_CHECKOV,REPOSITORY_DEVSKIM,REPOSITORY_DUSTILOCK,REPOSITORY_GITLEAKS,REPOSITORY_KICS,REPOSITORY_SECRETLINT,REPOSITORY_SEMGREP,REPOSITORY_SYFT,REPOSITORY_TRIVY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: megalinter-${{ matrix.app_name }}
+          path: megalinter-reports
+          retention-days: 7
+
+  # ==========================================================================
+  # Stage 3: SonarQube (per changed app)
+  # ==========================================================================
+  sonar:
+    name: "Sonar - ${{ matrix.app_name }}"
+    needs: [detect, lint]
+    if: needs.detect.outputs.has_changes == 'true' && !inputs.skip_sonar
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - name: Skip check
+        if: matrix.skip_sonar
+        run: echo "SonarQube skipped for ${{ matrix.app_name }}"
+
+      - name: Checkout
+        if: "!matrix.skip_sonar"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        if: "!matrix.skip_sonar"
+        uses: SonarSource/sonarqube-scan-action@v5
+        with:
+          projectBaseDir: ${{ matrix.app_path }}
+          args: >
+            -Dsonar.projectKey=${{ matrix.app_name }}
+            -Dsonar.sources=.
+            -Dsonar.exclusions=node_modules/**,dist/**,build/**,coverage/**,**/*.test.*,**/*.spec.*
+            -Dsonar.branch.name=${{ github.ref_name }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
+
+  # ==========================================================================
+  # Stage 4: Docker Build & Push ECR (per changed app)
+  # ==========================================================================
+  docker:
+    name: "Docker - ${{ matrix.app_name }}"
+    needs: [detect, sonar]
+    if: needs.detect.outputs.has_changes == 'true' && !inputs.skip_docker
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - name: Skip check
+        if: matrix.skip_docker
+        run: echo "Docker skipped for ${{ matrix.app_name }}"
+
+      - name: Checkout
+        if: "!matrix.skip_docker"
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        if: "!matrix.skip_docker"
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to ECR
+        if: "!matrix.skip_docker"
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Build and push
+        if: "!matrix.skip_docker"
+        working-directory: ${{ matrix.app_path }}
+        run: |
+          REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com"
+          REPO="${{ matrix.ecr_repository }}"
+          TAG="${{ github.run_number }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+          BUILD_CMD="docker build -f ${{ matrix.dockerfile }} -t ${IMAGE}"
+
+          if [ -n "${{ matrix.build_args }}" ]; then
+            IFS=',' read -ra ARGS <<< "${{ matrix.build_args }}"
+            for arg in "${ARGS[@]}"; do
+              BUILD_CMD="${BUILD_CMD} --build-arg ${arg}"
+            done
+          fi
+
+          eval ${BUILD_CMD} .
+          docker push ${IMAGE}
+          docker tag ${IMAGE} ${REGISTRY}/${REPO}:latest
+          docker push ${REGISTRY}/${REPO}:latest
+
+          echo "Pushed: ${IMAGE}"
