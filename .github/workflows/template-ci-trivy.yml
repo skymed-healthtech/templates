@@ -1,0 +1,126 @@
+name: "Template CI - Trivy Security Scan"
+
+on:
+  workflow_call:
+    inputs:
+      app_path:
+        description: "Path to the app directory"
+        required: true
+        type: string
+      scan_type:
+        description: "Scan type: fs (filesystem/dependencies), config (IaC/Dockerfile), image (Docker image)"
+        required: false
+        type: string
+        default: "fs"
+      severity:
+        description: "Minimum severity to report: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+        required: false
+        type: string
+        default: "HIGH,CRITICAL"
+      exit_code:
+        description: "Exit code when vulnerabilities found (0=warn, 1=fail)"
+        required: false
+        type: string
+        default: "0"
+      image_ref:
+        description: "Docker image to scan (only for scan_type=image)"
+        required: false
+        type: string
+        default: ""
+      skip_dirs:
+        description: "Directories to skip (comma-separated)"
+        required: false
+        type: string
+        default: "node_modules,dist,build,.git"
+
+jobs:
+  trivy:
+    name: "Trivy - ${{ inputs.app_path }}"
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Scan filesystem (dependencies + secrets)
+      - name: Trivy FS Scan
+        if: inputs.scan_type == 'fs'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.app_path }}
+          severity: ${{ inputs.severity }}
+          exit-code: ${{ inputs.exit_code }}
+          skip-dirs: ${{ inputs.skip_dirs }}
+          format: table
+
+      - name: Trivy FS Scan (SARIF)
+        if: inputs.scan_type == 'fs'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.app_path }}
+          severity: ${{ inputs.severity }}
+          skip-dirs: ${{ inputs.skip_dirs }}
+          format: sarif
+          output: trivy-fs-results.sarif
+
+      # Scan IaC/Dockerfile
+      - name: Trivy Config Scan
+        if: inputs.scan_type == 'config'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: ${{ inputs.app_path }}
+          severity: ${{ inputs.severity }}
+          exit-code: ${{ inputs.exit_code }}
+          format: table
+
+      - name: Trivy Config Scan (SARIF)
+        if: inputs.scan_type == 'config'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: ${{ inputs.app_path }}
+          severity: ${{ inputs.severity }}
+          format: sarif
+          output: trivy-config-results.sarif
+
+      # Scan Docker image
+      - name: Trivy Image Scan
+        if: inputs.scan_type == 'image' && inputs.image_ref != ''
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ inputs.image_ref }}
+          severity: ${{ inputs.severity }}
+          exit-code: ${{ inputs.exit_code }}
+          format: table
+
+      - name: Trivy Image Scan (SARIF)
+        if: inputs.scan_type == 'image' && inputs.image_ref != ''
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ inputs.image_ref }}
+          severity: ${{ inputs.severity }}
+          format: sarif
+          output: trivy-image-results.sarif
+
+      # Upload SARIF to GitHub Security tab
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: .
+          category: trivy-${{ inputs.scan_type }}-${{ inputs.app_path }}
+        continue-on-error: true
+
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ inputs.scan_type }}-${{ inputs.app_path }}
+          path: trivy-*.sarif
+          retention-days: 7
