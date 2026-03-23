@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       language:
-        description: "Language: node, dotnet, python"
+        description: "Language: node, dotnet, python, flutter"
         required: false
         type: string
         default: "node"
@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: "8.0"
+      megalinter_flavor:
+        description: "MegaLinter flavor: all, cupcake, dart, dotnet, javascript, python"
+        required: false
+        type: string
+        default: "all"
       dockerfile:
         description: "Dockerfile path relative to app_path"
         required: false
@@ -87,15 +92,13 @@ on:
         required: false
 
 jobs:
-  # Stage 1: Lint
+  # Stage 1: MegaLinter
   lint:
     if: ${{ !inputs.skip_lint }}
     uses: skymed-healthtech/templates/.github/workflows/template-ci-linter.yml@main
     with:
       app_path: ${{ inputs.app_path }}
-      language: ${{ inputs.language }}
-      node_version: ${{ inputs.node_version }}
-      dotnet_version: ${{ inputs.dotnet_version }}
+      megalinter_flavor: ${{ inputs.megalinter_flavor }}
 
   # Stage 2: Tests (parallel with lint)
   test:

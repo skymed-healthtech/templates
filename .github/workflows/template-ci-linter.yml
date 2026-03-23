@@ -1,4 +1,4 @@
-name: "Template CI - Linter"
+name: "Template CI - MegaLinter"
 
 on:
   workflow_call:
@@ -7,71 +7,50 @@ on:
         description: "Path to the app directory"
         required: true
         type: string
-      node_version:
-        description: "Node.js version"
+      megalinter_flavor:
+        description: "MegaLinter flavor: all, cupcake, dart, dotnet, javascript, python, etc."
         required: false
         type: string
-        default: "20"
-      dotnet_version:
-        description: ".NET version"
+        default: "all"
+      apply_fixes:
+        description: "Auto-fix issues and commit (none, commit, pull_request)"
         required: false
         type: string
-        default: ""
-      language:
-        description: "Language: node, dotnet, python"
-        required: false
-        type: string
-        default: "node"
+        default: "none"
 
 jobs:
-  lint:
-    name: "Lint - ${{ inputs.app_path }}"
+  megalinter:
+    name: "MegaLinter - ${{ inputs.app_path }}"
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # Node.js / TypeScript
-      - name: Setup Node.js
-        if: inputs.language == 'node'
-        uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node_version }}
-          cache: "npm"
-          cache-dependency-path: "${{ inputs.app_path }}/package-lock.json"
+          fetch-depth: 0
 
-      - name: Install dependencies
-        if: inputs.language == 'node'
-        working-directory: ${{ inputs.app_path }}
-        run: npm ci
+      - name: MegaLinter
+        id: ml
+        uses: oxsecurity/megalinter/flavors/${{ inputs.megalinter_flavor }}@v8
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APPLY_FIXES: ${{ inputs.apply_fixes }}
+          DEFAULT_WORKSPACE: /github/workspace/${{ inputs.app_path }}
+          FILTER_REGEX_INCLUDE: "(${{ inputs.app_path }}/)"
+          PRINT_ALPACA: false
+          SHOW_ELAPSED_TIME: true
+          FILEIO_REPORTER: false
+          SARIF_REPORTER: true
+          DISABLE_LINTERS: "SPELL_MISSPELL,SPELL_CSPELL,SPELL_PROSELINT,COPYPASTE_JSCPD,REPOSITORY_CHECKOV,REPOSITORY_DEVSKIM,REPOSITORY_DUSTILOCK,REPOSITORY_GITLEAKS,REPOSITORY_KICS,REPOSITORY_SECRETLINT,REPOSITORY_SEMGREP,REPOSITORY_SYFT,REPOSITORY_TRIVY"
+          DART_DARTANALYZER_ARGUMENTS: "--fatal-infos --fatal-warnings"
 
-      - name: Run ESLint
-        if: inputs.language == 'node'
-        working-directory: ${{ inputs.app_path }}
-        run: npm run lint --if-present
-
-      # .NET
-      - name: Setup .NET
-        if: inputs.language == 'dotnet'
-        uses: actions/setup-dotnet@v4
+      - name: Upload MegaLinter artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          dotnet-version: ${{ inputs.dotnet_version }}
-
-      - name: Run dotnet format
-        if: inputs.language == 'dotnet'
-        working-directory: ${{ inputs.app_path }}
-        run: dotnet format --verify-no-changes
-
-      # Python
-      - name: Setup Python
-        if: inputs.language == 'python'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Run Python linter
-        if: inputs.language == 'python'
-        working-directory: ${{ inputs.app_path }}
-        run: |
-          pip install ruff
-          ruff check .
+          name: megalinter-reports-${{ inputs.app_path }}
+          path: megalinter-reports
+          retention-days: 7

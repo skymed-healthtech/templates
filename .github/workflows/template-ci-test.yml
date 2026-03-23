@@ -18,10 +18,15 @@ on:
         type: string
         default: ""
       language:
-        description: "Language: node, dotnet, python"
+        description: "Language: node, dotnet, python, flutter"
         required: false
         type: string
         default: "node"
+      flutter_version:
+        description: "Flutter version"
+        required: false
+        type: string
+        default: "stable"
       test_command:
         description: "Custom test command (overrides default)"
         required: false
@@ -80,3 +85,22 @@ jobs:
         run: |
           pip install -r requirements.txt 2>/dev/null || true
           ${{ inputs.test_command != '' && inputs.test_command || 'python -m pytest --tb=short -q 2>/dev/null || echo "No tests found"' }}
+
+      # Flutter / Dart
+      - name: Setup Flutter
+        if: inputs.language == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        if: inputs.language == 'flutter'
+        working-directory: ${{ inputs.app_path }}
+        run: flutter pub get
+
+      - name: Run Flutter tests
+        if: inputs.language == 'flutter'
+        working-directory: ${{ inputs.app_path }}
+        run: ${{ inputs.test_command != '' && inputs.test_command || 'flutter test' }}
