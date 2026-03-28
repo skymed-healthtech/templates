@@ -1,0 +1,61 @@
+name: "Template - GitOps Update"
+
+on:
+  workflow_call:
+    inputs:
+      gitops_repo:
+        description: "GitOps repo (org/repo)"
+        required: true
+        type: string
+      values_file:
+        description: "Path to values YAML file in GitOps repo"
+        required: true
+        type: string
+      image_tag:
+        description: "New image tag to set"
+        required: true
+        type: string
+      git_user_name:
+        description: "Git commit user name"
+        required: false
+        type: string
+        default: "GitHub Actions"
+      git_user_email:
+        description: "Git commit user email"
+        required: false
+        type: string
+        default: "devops@skymed.app.br"
+    secrets:
+      GITOPS_SSH_KEY:
+        description: "SSH private key with write access to GitOps repo"
+        required: true
+
+jobs:
+  update-gitops:
+    name: "Update ${{ inputs.values_file }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GITOPS_SSH_KEY }}" > ~/.ssh/id_gitops
+          chmod 600 ~/.ssh/id_gitops
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Clone and update
+        env:
+          GIT_SSH_COMMAND: "ssh -i ~/.ssh/id_gitops -o IdentitiesOnly=yes"
+        run: |
+          git config --global user.email "${{ inputs.git_user_email }}"
+          git config --global user.name "${{ inputs.git_user_name }}"
+
+          git clone git@github.com:${{ inputs.gitops_repo }}.git /tmp/gitops
+          cd /tmp/gitops
+
+          sed -i "s|tag:.*|tag: ${{ inputs.image_tag }}|" "${{ inputs.values_file }}"
+
+          git add "${{ inputs.values_file }}"
+          git commit -m "chore: atualizar ${{ inputs.values_file }} para tag ${{ inputs.image_tag }}"
+          git push origin main
+
+          echo "GitOps updated: ${{ inputs.values_file }} -> ${{ inputs.image_tag }}"
