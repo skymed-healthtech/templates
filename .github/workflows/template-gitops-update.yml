@@ -56,6 +56,12 @@ jobs:
 
           git add "${{ inputs.values_file }}"
           git commit -m "chore: atualizar ${{ inputs.values_file }} para tag ${{ inputs.image_tag }}"
-          git push origin main
+
+          # Retry com pull --rebase para lidar com race condition de pushes concorrentes
+          for i in 1 2 3; do
+            git push origin main && break
+            echo "Push failed (attempt $i), pulling and retrying..."
+            git pull --rebase origin main
+          done
 
           echo "GitOps updated: ${{ inputs.values_file }} -> ${{ inputs.image_tag }}"
