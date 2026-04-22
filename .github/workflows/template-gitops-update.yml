@@ -55,6 +55,10 @@ jobs:
           sed -i "s|tag:.*|tag: ${{ inputs.image_tag }}|" "${{ inputs.values_file }}"
 
           git add "${{ inputs.values_file }}"
+          if git diff --cached --quiet; then
+            echo "Nada para commitar — ${{ inputs.values_file }} já está em ${{ inputs.image_tag }}"
+            exit 0
+          fi
           git commit -m "chore: atualizar ${{ inputs.values_file }} para tag ${{ inputs.image_tag }}"
 
           # Retry com pull --rebase para lidar com race condition de pushes concorrentes
